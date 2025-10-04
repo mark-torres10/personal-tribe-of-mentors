@@ -8,7 +8,7 @@ import MessageBubble from './MessageBubble';
 interface ChatInterfaceProps {
   chat: Chat;
   onClose: () => void;
-  onUpdateChat: (chat: Chat) => void;
+  onUpdateChat: (chat: Chat | ((prev: Chat) => Chat)) => void;
 }
 
 export default function ChatInterface({ chat, onClose, onUpdateChat }: ChatInterfaceProps) {
@@ -36,45 +36,61 @@ export default function ChatInterface({ chat, onClose, onUpdateChat }: ChatInter
       timestamp: new Date(),
     };
 
+    const question = input.trim();
     const updatedChat = { ...chat, messages: [...chat.messages, userMessage] };
     onUpdateChat(updatedChat);
     setInput('');
     setIsLoading(true);
 
-    // Simulate mentor responses (in real app, this would call backend)
+    // Get responses from backend for each selected mentor
     const selectedMentors = mentors.filter(m => chat.selectedMentors.includes(m.id));
-    const currentMessages = [...updatedChat.messages];
     
-    selectedMentors.forEach((mentor, index) => {
-      setTimeout(() => {
+    for (const mentor of selectedMentors) {
+      try {
+        // Build conversation history for this mentor
+        const conversationHistory = chat.messages
+          .filter(m => m.mentorId === 'user' || m.mentorId === mentor.id)
+          .map(m => ({
+            role: m.mentorId === 'user' ? 'user' : 'assistant',
+            content: m.content
+          }));
+
+        const response = await fetch('http://localhost:8000/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mentor_id: mentor.id,
+            mentor_name: mentor.name,
+            question: question,
+            conversation_history: conversationHistory
+          })
+        });
+
+        if (!response.ok) throw new Error('Failed to get response');
+        
+        const data = await response.json();
+        
         const mentorMessage: Message = {
           id: `${Date.now()}-${mentor.id}`,
           mentorId: mentor.id,
           mentorName: mentor.name,
-          content: generateMockResponse(mentor.name, input.trim()),
+          content: data.content,
           timestamp: new Date(),
           avatar: mentor.avatar,
         };
 
-        currentMessages.push(mentorMessage);
-        onUpdateChat({ ...chat, messages: [...currentMessages] });
-
-        if (index === selectedMentors.length - 1) {
-          setIsLoading(false);
-        }
-      }, 500 + index * 1500);
-    });
-  };
-
-  const generateMockResponse = (mentorName: string, question: string): string => {
-    const responses = {
-      'Dr. Elena Cortez': `Great question! From a strategic perspective, I'd approach this by first understanding the broader context and long-term vision. Consider the market dynamics, competitive landscape, and how this aligns with your core objectives. My recommendation would be to break this down into clear milestones and ensure stakeholder alignment at each stage.`,
-      'Marcus Chen': `From a technical standpoint, let's think about scalability and maintainability. I'd suggest starting with a solid architectural foundation - consider microservices if you need flexibility, but don't over-engineer. Focus on clean abstractions, proper testing, and monitoring. Also, think about the data model carefully upfront to avoid costly refactors later.`,
-      'Sarah Thompson': `Excellent! Let's talk about growth and user impact. First, validate this with actual user data - what does the analytics tell us? I'd run some A/B tests to understand user behavior, then iterate quickly based on feedback. Think about the metrics that matter: retention, engagement, conversion. Build incrementally and let the data guide your decisions.`,
-    };
+        onUpdateChat((prevChat: Chat) => ({
+          ...prevChat,
+          messages: [...prevChat.messages, mentorMessage]
+        }));
+      } catch (error) {
+        console.error('Error getting mentor response:', error);
+      }
+    }
     
-    return responses[mentorName as keyof typeof responses] || `That's an interesting question about: "${question}". Let me share my perspective...`;
+    setIsLoading(false);
   };
+
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
